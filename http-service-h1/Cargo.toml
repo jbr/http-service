@@ -12,8 +12,8 @@ version = "0.1.0"
 
 [dependencies]
 http-service = { version = "0.5.0", path = ".." }
-http-types = "1.0.1"
-async-h1 = "1.1.0"
+http-types = { git = "https://github.com/http-rs/http-types.git", branch = "master" }
+async-h1 = { git = "https://github.com/jbr/async-h1.git", branch = "update-http-types" }
 async-std = { version = "1.5.0", default-features = false, features = ["std"] }
 
 [features]

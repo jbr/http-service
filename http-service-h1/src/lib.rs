@@ -22,7 +22,6 @@ use async_std::sync::Arc;
 pub struct Server<I, S: HttpService> {
     incoming: I,
     service: Arc<S>,
-    addr: String,
 }
 
 impl<I: Stream<Item = io::Result<TcpStream>>, S: HttpService> Server<I, S>
@@ -48,17 +47,15 @@ where
     /// async_std::task::block_on(async move {
     ///     // Then bind, configure the spawner to our pool, and serve...
     ///     let mut listener = TcpListener::bind("127.0.0.1:3000").await?;
-    ///     let addr = format!("http://{}", listener.local_addr()?);
-    ///     let mut server = Server::new(addr, listener.incoming(), service);
+    ///     let mut server = Server::new(listener.incoming(), service);
     ///     server.run().await?;
     ///     Ok::<(), Box<dyn std::error::Error>>(())
     /// })?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
-    pub fn new(addr: String, incoming: I, service: S) -> Self {
+    pub fn new(incoming: I, service: S) -> Self {
         Server {
             service: Arc::new(service),
             incoming,
-            addr,
         }
     }
 
@@ -66,7 +63,7 @@ where
     pub async fn run(&mut self) -> io::Result<()> {
         while let Some(stream) = self.incoming.next().await {
             let stream = stream?;
-            async_std::task::spawn(accept(self.addr.clone(), self.service.clone(), stream));
+            async_std::task::spawn(accept(self.service.clone(), stream));
         }
 
         Ok(())
@@ -74,7 +71,7 @@ where
 }
 
 /// Accept a new connection.
-async fn accept<S>(addr: String, service: Arc<S>, stream: TcpStream) -> Result<(), Error>
+async fn accept<S>(service: Arc<S>, stream: TcpStream) -> Result<(), Error>
 where
     S: HttpService,
     <<S as HttpService>::ResponseFuture as Future>::Output: Send,
@@ -89,7 +86,7 @@ where
         .await
         .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
 
-    async_h1::accept(&addr, stream.clone(), |req| async {
+    async_h1::accept(stream.clone(), |req| async {
         let conn = conn.clone();
         let service = service.clone();
         async move {
@@ -114,8 +111,7 @@ where
     <S as HttpService>::Connection: Sync,
 {
     let listener = async_std::net::TcpListener::bind(addr).await?;
-    let addr = format!("http://{}", listener.local_addr()?); // TODO: https
-    let mut server = Server::<_, S>::new(addr, listener.incoming(), service);
+    let mut server = Server::<_, S>::new(listener.incoming(), service);
 
     server.run().await
 }
