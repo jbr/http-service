@@ -10,7 +10,7 @@ use std::future::Future;
 use http_service::{Error, HttpService};
 
 use async_std::io::{self, Read, Write};
-use async_std::net::SocketAddr;
+use async_std::net::{SocketAddr, TcpStream};
 use async_std::prelude::*;
 use async_std::stream::Stream;
 use async_std::sync::Arc;
@@ -24,12 +24,45 @@ pub struct Server<I, S: HttpService> {
     service: Arc<S>,
 }
 
+pub trait NotSureWhatToCallThisIOTrait: Read + Write + Clone + Unpin + Send + Sync + 'static {
+    fn configure_request(&self, request: &mut http_types::Request) -> http_types::Result<()>;
+}
+
+impl NotSureWhatToCallThisIOTrait for TcpStream {
+    fn configure_request(&self, request: &mut http_types::Request) -> http_types::Result<()> {
+        request.set_peer_addr(self.peer_addr().ok());
+        request.set_local_addr(self.local_addr().ok());
+        Ok(())
+    }
+}
+
+impl NotSureWhatToCallThisIOTrait for UnixStreamWrapper {
+    fn configure_request(&self, request: &mut http_types::Request) -> http_types::Result<()> {
+        request.set_peer_addr(
+            self.0
+                .peer_addr()
+                .map(|socket_addr| socket_addr.as_pathname().unwrap().display().to_string())
+                .ok(),
+        );
+
+        request.set_local_addr(
+            self.0
+                .local_addr()
+                .map(|socket_addr| socket_addr.as_pathname().unwrap().display().to_string())
+                .ok(),
+        );
+
+        Ok(())
+    }
+}
+
+
 impl<I, RW, S> Server<I, S>
 where
     S: HttpService,
     <<S as HttpService>::ResponseFuture as Future>::Output: Send,
     <S as HttpService>::Connection: Sync,
-    RW: Read + Write + Clone + Unpin + Send + Sync + 'static,
+    RW: NotSureWhatToCallThisIOTrait,
     I: Stream<Item = io::Result<RW>> + Unpin + Send + Sync,
 {
     /// Consume this [`Builder`], creating a [`Server`].
@@ -49,7 +82,6 @@ where
     /// async_std::task::block_on(async move {
     ///     // Then bind, configure the spawner to our pool, and serve...
     ///     let mut listener = TcpListener::bind("127.0.0.1:3000").await?;
-    ///     let addr = format!("http://{}", listener.local_addr()?);
     ///     let mut server = Server::new(listener.incoming(), service);
     ///     server.run().await?;
     ///     Ok::<(), Box<dyn std::error::Error>>(())
@@ -65,8 +97,7 @@ where
     /// Run the server forever-ish.
     pub async fn run(&mut self) -> io::Result<()> {
         while let Some(read_write) = self.incoming.next().await {
-            let read_write = read_write?;
-            async_std::task::spawn(accept(self.service.clone(), read_write));
+            async_std::task::spawn(accept(self.service.clone(), read_write?));
         }
 
         Ok(())
@@ -79,7 +110,7 @@ where
     S: HttpService,
     <<S as HttpService>::ResponseFuture as Future>::Output: Send,
     <S as HttpService>::Connection: Sync,
-    RW: Read + Write + Unpin + Clone + Send + Sync + 'static,
+    RW: NotSureWhatToCallThisIOTrait,
 {
     let conn = service
         .clone()
@@ -87,7 +118,9 @@ where
         .await
         .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
 
-    async_h1::accept(read_write, |req| async {
+    let rw = read_write.clone();
+    async_h1::accept(read_write, |mut req| async {
+        rw.configure_request(&mut req)?;
         let conn = conn.clone();
         let service = service.clone();
         async move {
@@ -116,6 +149,7 @@ where
 
     server.run().await
 }
+
 
 #[derive(Clone, Debug)]
 #[allow(missing_docs)]
